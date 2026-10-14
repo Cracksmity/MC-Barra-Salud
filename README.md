@@ -10,6 +10,8 @@ Bobby
 **Características:**
 * **Sin experimentos:** usa solo la Script API **estable** (`@minecraft/server` 2.3.0). No hace falta activar "Beta APIs", así que funciona en BDS 1.26.30+, donde los mundos con experimentos no dejan entrar a los jugadores.
 * **Al mirar o al golpear:** la barra aparece sobre el mob que estás mirando o que acaba de recibir daño, y desaparece sola a los pocos segundos.
+* **Barra de acción:** la vida del mob que miras o golpeas también sale encima de tu inventario (`Zombie  ❤ ||||||||  14/20`), solo para ti. Al matarlo muestra `☠`.
+* **Cada jugador elige con `/barra`:** ver la sección [Comando](#-comando-barra).
 * **No ensucia el mundo:** cuando la barra se quita, el mob recupera su nombre original. Ningún mob se queda renombrado para siempre.
 * **Colores por porcentaje:** verde (>66%), amarillo (>33%), rojo (≤33%).
 * **Respeta nombres propios:** si tu mascota se llama "Bobby", la barra va debajo de su nombre. Si le cambias el nombre con una etiqueta mientras se ve la barra, se respeta el nombre nuevo.
@@ -33,6 +35,20 @@ La v1 dependía de `@minecraft/server 2.8.0-beta` (requería Beta APIs) y renomb
 * Los mobs guardados con el nombre de la v1 se limpian solos cuando se cargan: los que no tenían nombre se quedan sin nombre y los que tenían uno ("Dave") lo recuperan.
 * Cambia en `world_behavior_packs.json` el `pack_id` y la versión por los de arriba.
 
+## 💬 Comando `/barra`
+
+Cualquier jugador puede usarlo, sin trucos activados. El modo se guarda en el jugador y se conserva aunque salga del servidor.
+
+| Comando | Barra flotante | Barra de acción | Se activa al… |
+|---|---|---|---|
+| `/barra on` *(por defecto)* | ✅ | ✅ | mirar y golpear |
+| `/barra golpe` | ✅ | ✅ | solo golpear |
+| `/barra accion` | ❌ | ✅ | mirar y golpear |
+| `/barra off` | ❌ | ❌ | — |
+| `/barra` | muestra tu modo actual y las opciones | | |
+
+La barra flotante es el nombre del mob, así que **la ven todos los jugadores cercanos**. El modo de cada jugador decide si *sus* miradas y golpes la activan. Quien tenga `off` o `accion` igual puede ver la barra flotante que activó otro jugador, o la de un mob que se está quemando o cayendo (eso último se desactiva con `flotantePorDanoAmbiental: false`).
+
 ## ⚙️ Configuración (opcional)
 
 Edita el bloque `CONFIG` al inicio de `scripts/main.js`:
@@ -40,6 +56,8 @@ Edita el bloque `CONFIG` al inicio de `scripts/main.js`:
 | Opción | Por defecto | Qué hace |
 |---|---|---|
 | `debug` | `false` | Logs de diagnóstico en la consola |
+| `modoPorDefecto` | `"on"` | Modo de los jugadores que nunca usaron `/barra` |
+| `flotantePorDanoAmbiental` | `true` | Barra flotante cuando el daño no viene de un jugador (lava, sol, otros mobs…) |
 | `duracionDanoTicks` | `100` | Cuánto se ve la barra tras recibir daño (20 ticks = 1 s) |
 | `mostrarAlMirar` | `true` | Mostrar la barra del mob que miras |
 | `duracionMiradaTicks` | `40` | Cuánto se queda tras dejar de mirarlo |

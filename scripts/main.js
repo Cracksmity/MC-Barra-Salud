@@ -22,12 +22,33 @@
  *      §c  rojo      ≤ 33%
  */
 
-import { world, system } from "@minecraft/server";
+import {
+  world,
+  system,
+  CommandPermissionLevel,
+  CustomCommandParamType,
+  CustomCommandStatus,
+} from "@minecraft/server";
 
 // ── Configuración ──────────────────────────────────────────
 const CONFIG = {
   /** Logs de diagnóstico en la consola del servidor. */
   debug: false,
+
+  /**
+   * Modo de cada jugador hasta que elija otro con /barra:
+   *   "on"     barra flotante + barra de acción, al mirar y al golpear
+   *   "golpe"  barra flotante + barra de acción, solo al golpear
+   *   "accion" solo barra de acción (encima del inventario), al mirar y al golpear
+   *   "off"    nada
+   */
+  modoPorDefecto: "on",
+
+  /**
+   * Mostrar la barra flotante cuando el daño no viene de un jugador
+   * (lava, caídas, otros mobs, el sol a los zombis…).
+   */
+  flotantePorDanoAmbiental: true,
 
   /** Cuánto se ve la barra después de recibir daño (20 ticks = 1 s). */
   duracionDanoTicks: 100,
@@ -174,8 +195,8 @@ function colorPorVida(ratio) {
   return "§c";
 }
 
-/** Devuelve el texto de la barra, o undefined si la entidad no tiene salud. */
-function construirTexto(entity, original) {
+/** "❤ ||||||||||  14/20", o undefined si la entidad no tiene salud. */
+function lineaDeVida(entity) {
   const salud = entity.getComponent("minecraft:health");
   if (!salud) return undefined;
 
@@ -189,11 +210,24 @@ function construirTexto(entity, original) {
   const barra =
     colorPorVida(ratio) + CONFIG.caracterBarra.repeat(llenos) +
     "§8" + CONFIG.caracterBarra.repeat(n - llenos);
-  const linea = `§c❤ ${barra} §f${Math.ceil(actual)}§7/${Math.ceil(max)}`;
+  return `§c❤ ${barra} §f${Math.ceil(actual)}§7/${Math.ceil(max)}`;
+}
+
+/** Texto de la barra flotante (nameTag), o undefined si la entidad no tiene salud. */
+function construirTexto(entity, original) {
+  const linea = lineaDeVida(entity);
+  if (linea === undefined) return undefined;
 
   const nombre = original || (CONFIG.mostrarNombreDelTipo ? nombreDelTipo(entity.typeId) : "");
   if (!nombre) return linea;
   return `§f${nombre}§r${CONFIG.dosLineas ? "\n" : " "}${linea}`;
+}
+
+/** Nombre real de la entidad aunque ahora mismo lleve la barra flotante. */
+function nombreReal(entity) {
+  const registro = activas.get(entity.id);
+  const nombre = registro ? registro.original : entity.nameTag;
+  return nombre || nombreDelTipo(entity.typeId);
 }
 
 function esRastreable(entity) {
@@ -305,19 +339,169 @@ function sanear(entity) {
   }
 }
 
+// ── Modos por jugador (/barra) ─────────────────────────────
+
+const PROP_MODO = "barra_salud:modo";
+
+/**
+ * mirar:    lo que mira el jugador dispara las barras
+ * golpe:    lo que golpea el jugador dispara las barras
+ * flotante: usar la barra flotante sobre el mob
+ * accion:   usar la barra de acción (encima del inventario)
+ */
+const MODOS = {
+  on: { mirar: true, golpe: true, flotante: true, accion: true },
+  golpe: { mirar: false, golpe: true, flotante: true, accion: true },
+  accion: { mirar: true, golpe: true, flotante: false, accion: true },
+  off: { mirar: false, golpe: false, flotante: false, accion: false },
+};
+
+const DESCRIPCION_MODOS = {
+  on: "barra flotante y barra de acción, al mirar y al golpear",
+  golpe: "barra flotante y barra de acción, solo al golpear",
+  accion: "solo barra de acción, al mirar y al golpear",
+  off: "sin barras",
+};
+
+/** Caché del modo de cada jugador (también se guarda en el jugador). */
+const modos = new Map();
+
+function nombreModo(player) {
+  let modo = modos.get(player.id);
+  if (modo === undefined) {
+    const guardado = player.getDynamicProperty(PROP_MODO);
+    modo = typeof guardado === "string" && guardado in MODOS ? guardado : CONFIG.modoPorDefecto;
+    modos.set(player.id, modo);
+  }
+  return modo;
+}
+
+function modoDe(player) {
+  return MODOS[nombreModo(player)] ?? MODOS.on;
+}
+
+// ── Barra de acción ────────────────────────────────────────
+
+/**
+ * Mob que cada jugador tiene en la barra de acción, por id de jugador.
+ * @type {Map<string, { player: import("@minecraft/server").Player, entity: import("@minecraft/server").Entity, expira: number }>}
+ */
+const objetivos = new Map();
+
+function fijarObjetivo(player, entity, duracion) {
+  if (!esRastreable(entity)) return;
+  const expira = system.currentTick + duracion;
+  const actual = objetivos.get(player.id);
+  if (actual && actual.entity.id === entity.id) {
+    actual.expira = Math.max(actual.expira, expira);
+  } else {
+    objetivos.set(player.id, { player, entity, expira });
+  }
+  actualizarAccion(player.id, objetivos.get(player.id));
+}
+
+function actualizarAccion(playerId, objetivo) {
+  const { player, entity } = objetivo;
+  try {
+    if (!player.isValid || !entity.isValid || system.currentTick >= objetivo.expira) {
+      objetivos.delete(playerId);
+      return;
+    }
+    const linea = lineaDeVida(entity);
+    if (linea === undefined) {
+      objetivos.delete(playerId);
+      return;
+    }
+    player.onScreenDisplay.setActionBar(`§f${nombreReal(entity)}§r  ${linea}`);
+  } catch {
+    objetivos.delete(playerId);
+  }
+}
+
+// ── Comando /barra ─────────────────────────────────────────
+
+system.beforeEvents.startup.subscribe(({ customCommandRegistry }) => {
+  customCommandRegistry.registerEnum("barra:modo", Object.keys(MODOS));
+  customCommandRegistry.registerCommand(
+    {
+      name: "barra:barra",
+      description: "Elige cómo ves la barra de salud: on, golpe, accion u off",
+      permissionLevel: CommandPermissionLevel.Any,
+      cheatsRequired: false,
+      optionalParameters: [{ name: "barra:modo", type: CustomCommandParamType.Enum }],
+    },
+    (origin, modo) => {
+      const player = origin.sourceEntity;
+      if (!player || player.typeId !== "minecraft:player") {
+        return { status: CustomCommandStatus.Failure, message: "Solo un jugador puede usar /barra." };
+      }
+
+      if (modo === undefined) {
+        const actual = nombreModo(player);
+        const opciones = Object.keys(MODOS)
+          .map((m) => `§e${m}§7: ${DESCRIPCION_MODOS[m]}`)
+          .join("\n");
+        return {
+          status: CustomCommandStatus.Success,
+          message: `§c❤ §fTu modo: §e${actual}§f (${DESCRIPCION_MODOS[actual]}).\n§7Cámbialo con /barra <modo>:\n${opciones}`,
+        };
+      }
+
+      modos.set(player.id, modo);
+      // El callback corre en modo restringido: el guardado va al siguiente tick.
+      system.run(() => {
+        try {
+          if (player.isValid) player.setDynamicProperty(PROP_MODO, modo);
+        } catch {
+          // Si no se pudo guardar, el modo dura hasta que salga del servidor.
+        }
+      });
+      if (!MODOS[modo].accion) objetivos.delete(player.id);
+      return {
+        status: CustomCommandStatus.Success,
+        message: `§c❤ §fBarra de salud: §e${modo}§f (${DESCRIPCION_MODOS[modo]}).`,
+      };
+    }
+  );
+});
+
 // ── Eventos ────────────────────────────────────────────────
 
-world.afterEvents.entityHurt.subscribe(({ hurtEntity }) => {
-  mostrar(hurtEntity, CONFIG.duracionDanoTicks);
+world.afterEvents.entityHurt.subscribe(({ hurtEntity, damageSource }) => {
+  const atacante = damageSource.damagingEntity;
+  if (atacante?.typeId !== "minecraft:player") {
+    if (CONFIG.flotantePorDanoAmbiental) mostrar(hurtEntity, CONFIG.duracionDanoTicks);
+    return;
+  }
+  const modo = modoDe(atacante);
+  if (!modo.golpe) return;
+  if (modo.flotante) mostrar(hurtEntity, CONFIG.duracionDanoTicks);
+  if (modo.accion) fijarObjetivo(atacante, hurtEntity, CONFIG.duracionDanoTicks);
 });
 
 world.afterEvents.entityDie.subscribe(({ deadEntity }) => {
+  // Avisar en la barra de acción antes de quitar la flotante (que cambia el nombre).
+  for (const [playerId, objetivo] of objetivos) {
+    if (objetivo.entity.id !== deadEntity.id) continue;
+    objetivos.delete(playerId);
+    try {
+      objetivo.player.onScreenDisplay.setActionBar(`§f${nombreReal(deadEntity)}§r  §8☠`);
+    } catch {
+      // El jugador ya no está.
+    }
+  }
+
   const registro = activas.get(deadEntity.id);
   if (registro) ocultar(deadEntity.id, registro);
 });
 
 world.afterEvents.entityRemove.subscribe(({ removedEntityId }) => {
   activas.delete(removedEntityId);
+});
+
+world.afterEvents.playerLeave.subscribe(({ playerId }) => {
+  objetivos.delete(playerId);
+  modos.delete(playerId);
 });
 
 world.afterEvents.entityLoad.subscribe(({ entity }) => {
@@ -341,7 +525,7 @@ world.afterEvents.worldLoad.subscribe(() => {
 
 // ── Bucles ─────────────────────────────────────────────────
 
-// Mantiene al día las barras visibles y las quita cuando caducan.
+// Mantiene al día las barras flotantes visibles y las quita cuando caducan.
 system.runInterval(() => {
   const ahora = system.currentTick;
   for (const [id, registro] of activas) {
@@ -359,10 +543,13 @@ system.runInterval(() => {
   }
 }, CONFIG.intervaloRefrescoTicks);
 
-// Barra del mob al que mira cada jugador.
-if (CONFIG.mostrarAlMirar) {
-  system.runInterval(() => {
+// Barras del mob al que mira cada jugador, y refresco de la barra de acción.
+system.runInterval(() => {
+  if (CONFIG.mostrarAlMirar) {
     for (const player of world.getPlayers()) {
+      const modo = modoDe(player);
+      if (!modo.mirar) continue;
+
       let impactos;
       try {
         impactos = player.getEntitiesFromViewDirection({
@@ -374,10 +561,15 @@ if (CONFIG.mostrarAlMirar) {
       }
       for (const { entity } of impactos) {
         if (entity.id !== player.id && esRastreable(entity)) {
-          mostrar(entity, CONFIG.duracionMiradaTicks);
+          if (modo.flotante) mostrar(entity, CONFIG.duracionMiradaTicks);
+          if (modo.accion) fijarObjetivo(player, entity, CONFIG.duracionMiradaTicks);
           break;
         }
       }
     }
-  }, CONFIG.intervaloMiradaTicks);
-}
+  }
+
+  for (const [playerId, objetivo] of objetivos) {
+    actualizarAccion(playerId, objetivo);
+  }
+}, CONFIG.intervaloMiradaTicks);
