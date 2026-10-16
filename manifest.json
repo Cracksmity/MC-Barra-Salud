@@ -2,10 +2,10 @@
   "format_version": 2,
   "header": {
     "name": "§c❤ §fBarra de Salud",
-    "description": "Floating health name tags above all entities — server-side script.",
+    "description": "Barra de vida sobre los mobs que miras o golpeas. Solo API estable: no necesita experimentos.",
     "uuid": "b8c4d28f-7f12-4c28-9812-70b13d42c3b2",
-    "version": [1, 0, 0],
-    "min_engine_version": [1, 21, 0]
+    "version": [2, 0, 0],
+    "min_engine_version": [1, 21, 120]
   },
   "modules": [
     {
@@ -13,13 +13,13 @@
       "language": "javascript",
       "uuid": "e9a3194a-8924-4f2b-8a8b-1e2479e2c4d5",
       "entry": "scripts/main.js",
-      "version": [1, 0, 0]
+      "version": [2, 0, 0]
     }
   ],
   "dependencies": [
     {
       "module_name": "@minecraft/server",
-      "version": "2.8.0-beta"
+      "version": "2.3.0"
     }
   ]
 }
