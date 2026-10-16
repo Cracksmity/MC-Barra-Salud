@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/logo.svg" alt="Barra de Salud" width="120">
+</p>
+
 # Barra de Salud (Floating Health Bar)
 
 Behavior Pack para servidores de Minecraft Bedrock Edition que muestra una barra de vida sobre los mobs:
